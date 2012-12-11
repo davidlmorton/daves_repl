@@ -1,0 +1,59 @@
+use warnings;
+use strict;
+use POSIX qw(strftime);
+use English;
+
+BEGIN { push(@INC, $ENV{HOME} . '/.re.pl'); };
+use ls qw(ls);
+
+use above 'Genome';
+
+printf("\tUsing perl v%vd at %s\n", $PERL_VERSION, $EXECUTABLE_NAME);
+
+# needs to be done before load_plugin
+$ENV{PERLREPL_HISTLEN} = 100000;
+
+# load plugins
+load_plugin qw(
+    Completion
+    CompletionDriver::INC
+    CompletionDriver::LexEnv
+    CompletionDriver::Keywords
+    CompletionDriver::Methods
+    FancyPrompt
+    Refresh
+    Colors
+    DumpHistory
+    ReadLineHistory
+);
+
+# setup keybindings that don't suck (as much)
+$_REPL->term->parse_and_bind('"\e[A": history-search-backward');
+$_REPL->term->parse_and_bind('"\e[B": history-search-forward');
+
+# make the prompt less terrible
+$_REPL->term->ornaments(0);
+
+{ # scope this block
+    my $_prompt;
+    $_REPL->fancy_prompt(
+        sub {
+            my ($self) = @_;
+            my $time_string = strftime('%D %T',localtime); ## outputs mm/dd/yy hh:mm:ss
+            my $line_string = sprintf("[%s]", $self->lines_read);
+            $_prompt = sprintf('%s %s', $time_string, $line_string);
+            return "$_prompt ";
+        }
+    );
+
+    $_REPL->fancy_continuation_prompt(
+        sub {
+            my ($self) = @_;
+            my $continuation_prompt = '-|';
+
+            my $num_spaces = length($_prompt) - length($continuation_prompt);
+            return sprintf("%s%s ", ' 'x($num_spaces), $continuation_prompt);
+        }
+    );
+}
+
