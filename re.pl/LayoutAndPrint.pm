@@ -11,6 +11,7 @@ require Exporter;
 our @ISA = qw(Exporter);
 our @EXPORT_OK = qw(
     layout_and_print
+    width
 );
 
 
@@ -100,7 +101,7 @@ sub determine_column_widths {
     my $max_num_columns = ceil($screen_width/2);
     $max_num_columns = min(($max_num_columns, scalar(@items)));
 
-    my @item_lengths = map {length color_strip($_)} @items;
+    my @item_lengths = map {width($_)} @items;
     for(my $i=$max_num_columns; $i>0; $i--) {
         my @packed_item_lengths = pack_items(\@item_lengths, $i);
         my @column_widths = _column_widths(@packed_item_lengths);
@@ -112,6 +113,10 @@ sub determine_column_widths {
             return @column_widths;
         }
     }
+}
+
+sub width {
+    return length(color_strip(shift));
 }
 
 # word lengths are stored in @columns like:
