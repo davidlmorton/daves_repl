@@ -180,6 +180,9 @@ sub print_view {
     if (@short_entries) {
         layout_and_print(\@short_entries, '    ');
     }
+    if (@long_entries) {
+        print "\n";
+    }
     for my $entry (@long_entries) {
         printf "    %s\n", $entry;
     }
