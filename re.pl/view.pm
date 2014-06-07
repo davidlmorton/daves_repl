@@ -24,13 +24,13 @@ my %COLORS = (
 );
 
 sub view {
-    my ($target, $verbose) = @_;
+    my ($target, $verbose, $memory_safe) = @_;
 
     unless (is_ur_object($target) and $target->__meta__) {
         die sprintf("command (view) only works on UR objects (with __meta__)");
     }
 
-    my ($properties, $class_symbols) = get_properties_and_class_symbols($target, $verbose);
+    my ($properties, $class_symbols) = get_properties_and_class_symbols($target, $verbose, $memory_safe);
     print_view($target, $properties, $class_symbols, $verbose);
 
     return ' ';
@@ -48,6 +48,7 @@ sub is_ur_object {
 sub get_properties_and_class_symbols {
     my $target = shift;
     my $verbose = shift;
+    my $memory_safe = shift;
 
     my %properties;
     my @possible_symbols = ('*', '**', '^', '^^', '#', '##', '&', '&&');
@@ -77,7 +78,7 @@ sub get_properties_and_class_symbols {
 
         $properties{$name} = sprintf("%s%s => %s", $class_symbol,
             $name_string,
-            format_values($target, $name, $property_meta, $verbose));
+            format_values($target, $name, $property_meta, $verbose, $memory_safe));
     }
     return \%properties, \%class_symbols;
 }
@@ -106,13 +107,16 @@ sub get_info {
 }
 
 sub format_values {
-    my ($target, $accessor, $meta, $verbose) = @_;
+    my ($target, $accessor, $meta, $verbose, $memory_safe) = @_;
 
     if ($meta->is_calculated) {
         return colored('calculated', $COLORS{'non-value'});
     }
 
     if ($meta->is_many) {
+        if ($memory_safe) {
+            return colored('is_many', $COLORS{'non-value'});
+        }
         my $values = eval {[$target->$accessor]};
         if ($@) {
             return colored('accessor error', $COLORS{error});
