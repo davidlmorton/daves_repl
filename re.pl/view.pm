@@ -15,16 +15,23 @@ our @EXPORT_OK = qw(
     view
 );
 
-# print information
-sub view {
-    my ($target) = @_;
+my %COLORS = (
+    'property' => 'magenta',
+    'class' => 'green',
+    'non-value' => 'cyan',
+    'error' => 'red',
+    'db' => 'blue',
+);
 
-    unless (is_ur_object($target)) {
-        die sprintf("command (view) only works on UR objects");
+sub view {
+    my ($target, $verbose) = @_;
+
+    unless (is_ur_object($target) and $target->__meta__) {
+        die sprintf("command (view) only works on UR objects (with __meta__)");
     }
 
-    my ($properties, $class_symbols) = get_properties_and_class_symbols($target);
-    print_view($target, $properties, $class_symbols);
+    my ($properties, $class_symbols) = get_properties_and_class_symbols($target, $verbose);
+    print_view($target, $properties, $class_symbols, $verbose);
 
     return ' ';
 }
@@ -40,14 +47,15 @@ sub is_ur_object {
 
 sub get_properties_and_class_symbols {
     my $target = shift;
+    my $verbose = shift;
 
     my %properties;
-    my @possible_symbols = ('*', '**', '#', '##', '&', '&&', '^', '^^');
+    my @possible_symbols = ('*', '**', '^', '^^', '#', '##', '&', '&&');
     my %class_symbols = ($target->class => '');
 
-    for my $name ($target->property_names) {
-        my $meta = $target->__meta__->property_meta_for_name($name);
-        my $class_name = $meta->class_name;
+    for my $property_meta ($target->__meta__->properties) {
+        my $name = $property_meta->property_name;
+        my $class_name = $property_meta->class_name;
 
         my $class_symbol;
         if (exists($class_symbols{$class_name})) {
@@ -60,38 +68,75 @@ sub get_properties_and_class_symbols {
         }
 
         my $name_string;
-        if ($meta->default_value) {
-            $name_string = sprintf("%s%s(default=%s)" , $class_symbol, $name,
-                pp($meta->default_value));
+        my $info_string = $verbose ? get_info($property_meta) : '';
+        if ($info_string) {
+            $name_string = sprintf("%s(%s)", colored($name, $COLORS{property}), $info_string);
         } else {
-            $name_string = $class_symbol . $name;
+            $name_string = sprintf("%s", colored($name, $COLORS{property}));
         }
 
-        $properties{$name} = sprintf("%s = %s", colored($name_string, 'cyan'),
-            format_values($target, $name, $meta));
+        $properties{$name} = sprintf("%s%s => %s", $class_symbol,
+            $name_string,
+            format_values($target, $name, $property_meta, $verbose));
     }
     return \%properties, \%class_symbols;
 }
 
+sub get_info {
+    my $meta = shift;
+    my %info;
+
+    if ($meta->default_value) {
+        $info{default} = pp($meta->default_value);
+    }
+
+    if ($meta->via) {
+        $info{via} = colored($meta->via, $COLORS{property});
+    }
+
+    my @strings;
+    if ($meta->column_name) {
+        push @strings, colored(uc $meta->column_name, $COLORS{db});
+    }
+    for my $key (keys %info) {
+        push @strings, sprintf("%s=%s", $key, $info{$key});
+    }
+
+    return join(',', @strings);
+}
+
 sub format_values {
-    my ($target, $accessor, $meta) = @_;
+    my ($target, $accessor, $meta, $verbose) = @_;
 
     if ($meta->is_calculated) {
-        return colored('is calculated', 'magenta');
+        return colored('calculated', $COLORS{'non-value'});
     }
 
     if ($meta->is_many) {
         my $values = eval {[$target->$accessor]};
         if ($@) {
-            return colored('accessor error', 'red');
+            return colored('accessor error', $COLORS{error});
         } else {
-            return sprintf("[%s]",
-                join(', ', map {format_single_value($_)} @$values));
+            if ($verbose) {
+                return sprintf("[%s]",
+                    join(', ', map {format_single_value($_)} @$values));
+            } elsif (scalar(@$values)) {
+                my $ref = ref($values->[0]);
+                my $plural = scalar(@$values) > 1 ? 's' : '';
+                if ($ref) {
+                    return sprintf("[%s %s object%s]",
+                        scalar(@$values), colored($ref, $COLORS{class}), $plural);
+                } else {
+                    return sprintf("[%s value%s]", scalar(@$values), $plural);
+                }
+            } else {
+                return "[]";
+            }
         }
     } else {
         my $value = eval {$target->$accessor};
         if ($@) {
-            return colored('accessor error', 'red');
+            return colored('accessor error', $COLORS{error});
         } else {
             return format_single_value($value);
         }
@@ -101,10 +146,15 @@ sub format_values {
 sub format_single_value {
     my ($value) = @_;
     if (is_ur_object($value)) {
-        return sprintf('%s->get(id => %s)', $value->class,
+        return sprintf('%s->get(id => %s)', colored($value->class, $COLORS{class}),
             pp($value->id));
     } else {
-        return pp($value);
+        my $result = pp($value);
+        if ($result eq 'undef') {
+            return colored($result, $COLORS{'non-value'});
+        } else {
+            return $result;
+        }
     }
 }
 
@@ -112,8 +162,12 @@ sub print_view {
     my $target = shift;
     my %properties = %{(shift)};
     my %class_symbols = %{(shift)};
+    my $verbose = shift;
 
-    printf("==== %s ====\n", colored($target->class, 'green'));
+    my @table_names = table_names($target);
+    printf("==== %s %s====\n", colored($target->class, $COLORS{class}),
+        (scalar(@table_names) and $verbose) ?
+            sprintf("(%s) ", join(', ', map {colored(uc $_, $COLORS{db})} @table_names)) : '');
     my (@long_entries, @short_entries);
     my $short_size = (GetTerminalSize())[0] / 3;
     for my $property_name (sort keys %properties) {
@@ -132,8 +186,18 @@ sub print_view {
     for my $class_name (sort {$class_symbols{$a} cmp $class_symbols{$b}} keys %class_symbols) {
         if ($class_name ne $target->class) {
             printf "%s defined in %s\n", $class_symbols{$class_name},
-            colored($class_name, 'green');
+            colored($class_name, $COLORS{class});
         }
     }
+}
+
+sub table_names {
+    my $target = shift;
+
+    my $names = Set::Scalar->new();
+    for my $property ($target->__meta__->properties) {
+        $names->insert(($property->table_and_column_name_for_property)[0]) if $property->column_name;
+    }
+    return $names->members;
 }
 
