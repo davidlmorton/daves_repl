@@ -178,6 +178,7 @@ sub print_view {
         if (width($properties{$property_name}) < $short_size) {
             push @short_entries, $properties{$property_name};
         } else {
+            push @short_entries, format_short($properties{$property_name});
             push @long_entries, $properties{$property_name};
         }
     }
@@ -196,6 +197,12 @@ sub print_view {
             colored($class_name, $COLORS{class});
         }
     }
+}
+
+sub format_short {
+    my $entry = shift;
+    my ($name_part) = split(/\s=>\s/, $entry);
+    return sprintf('%s => %s', $name_part, colored('see below', $COLORS{'non-value'}));
 }
 
 sub table_names {
