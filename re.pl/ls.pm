@@ -2,294 +2,153 @@ package ls;
 
 use warnings;
 use strict;
-no strict 'refs';
 
 use Term::ANSIColor qw(colored);
-require Class::Inspector;
-use PadWalker 'peek_my';
 use Set::Scalar;
 use LayoutAndPrint "layout_and_print";
+use ReplCore qw(
+    ancestors
+    class_name
+    fullpath
+    is_ur_class
+    is_ur_object
+    print_class_key
+    print_header
+    subs_info
+);
 
 require Exporter;
 our @ISA = qw(Exporter);
 our @EXPORT_OK = qw(
+    lineage
     ls
-    get_local_variables
 );
 
-# return the names and types of local variables
-sub get_local_variables {
-    my ($level) = @_;
-    $level = 1 unless(defined($level));
+sub lineage {
+    my $target = shift;
+    my $verbose = shift;
 
-    my $p = peek_my($level);
-    my %p = %{$p};
-    my @names = keys %p;
-    my @values = values %p;
-    my @types = map {ref($_)} @values;
-
-    return \@names, \@types;
+    print_ancestry({class_name($target) => ancestors($target)},
+        '  ', $verbose);
+    return '';
 }
 
-# print information
-sub ls{
-    my ($target) = @_;
+sub print_ancestry {
+    my $ancestors = shift;
+    my $tab = shift;
+    my $verbose = shift;
 
-    if(defined($target)) {
-        my $target_ref = ref($target);
-        if($target_ref) {
-            if(Class::Inspector->installed($target_ref) or
-               Class::Inspector->loaded($target_ref)) {
-                ls_class($target_ref);
-            } elsif($target_ref eq 'HASH') {
-                ls_hash($target);
+    if (ref $ancestors) {
+        for my $key (keys %$ancestors) {
+            if (not $verbose and ($key eq 'UR::Object' or $key eq 'UR::ModuleBase')) {
+                # do nothing, because we don't want to see that stuff
             } else {
-                die sprintf("ls cannot interrogate '%s'\n", $target_ref);
+                printf("%s%s\n", $tab, format_ancestor($key, $verbose));
+                print_ancestry($ancestors->{$key}, $tab . '  ', $verbose);
             }
-        } else {
-            if(Class::Inspector->installed($target) or
-               Class::Inspector->loaded($target)) {
-                ls_class($target);
-            } else {
-                die sprintf("ls cannot interrogate '%s'\n", $target);
-            }
-
         }
     } else {
-        ls_local_variables();
+        # do nothing, because it is a leaf node.
+    }
+}
+
+sub format_ancestor {
+    my $ancestor = shift;
+    my $verbose = shift;
+
+    my $class = colored($ancestor, 'green');
+    if ($verbose) {
+        return sprintf('%s %s', $class, fullpath($ancestor) || colored('cannot determine file', 'red'));
+    } else {
+        return $class
+    }
+}
+
+
+sub ls {
+    my $target = shift;
+    my $verbose = shift;
+
+    print_header($target);
+    if (is_ur_object($target) or is_ur_class($target)) {
+        ls_ur($target, $verbose);
+    } else {
+        die "Sorry, this command (ls) only works with UR objects and classes";
     }
     return ' ';
 }
 
-# print information about local variables
-sub ls_local_variables {
-    my ($names, $types) = get_local_variables(3);
+sub ls_ur {
+    my $target = shift;
+    my $verbose = shift;
 
-    my @colors = colorize_variable_names(
-            [qw(ARRAY HASH SCALAR REF other)],
-            [qw(ARRAY HASH SCALAR REF other)]);
-    printf("Local variables: (%s)\n", join(', ', @colors));
-    my @colored_names = colorize_variable_names($names, $types);
-    my @sorted_names = sort(@colored_names);
-    layout_and_print(\@sorted_names, '    ');
+    my $property_info = property_info($target);
+    my $subs_info = subs_info($target);
+
+    unless ($verbose) {
+        remove_ur_object($property_info);
+        remove_ur_object($subs_info);
+    }
+    my $class_symbols = class_symbols((values %$property_info, values %$subs_info));
+
+    color_and_layout($property_info, $class_symbols, 'magenta');
+    color_and_layout($subs_info, $class_symbols, 'cyan');
+    print_class_key($class_symbols);
 }
 
-# print information about a hash reference
-sub ls_hash {
-    my ($target) = @_;
+sub remove_ur_object {
+    my $info = shift;
 
-    my ($keys, $types) = get_hashref_info($target);
-
-    my @colors = colorize_variable_names(
-            [qw(ARRAY HASH SCALAR REF other)],
-            [qw(ARRAY HASH SCALAR REF other)]);
-    printf("A hash reference with keys: (%s)\n", join(', ', @colors));
-    my @colored_keys = colorize_variable_names($keys, $types);
-    my @sorted_keys = sort(@colored_keys);
-    layout_and_print(\@sorted_keys, '    ');
-}
-
-sub get_hashref_info {
-    my ($hashref) = @_;
-
-    my @keys = keys %{$hashref};
-    my @types = map {ref($hashref->{$_})} @keys;
-    return \@keys, \@types;
-}
-
-# print information about a class or object
-sub ls_class {
-    my ($target, $is_continuation) = @_;
-
-    my %info = get_method_and_property_info($target);
-    layout_and_print_ls_info($target, \%info,
-            $is_continuation);
-
-    # continuation
-    unless($is_continuation) {
-        my @parents = get_class_parents_recursively($target);
-        # only show each parent once
-        my $parents_set = Set::Scalar->new(@parents);
-        for my $parent (@parents) {
-            if($parents_set->has($parent)) {
-                $parents_set->delete($parent);
-                ls_class($parent, 1)
-            }
+    for my $key (keys %$info) {
+        if ($info->{$key} eq 'UR::Object' or
+            $info->{$key} eq 'UR::ModuleBase') {
+            delete $info->{$key};
         }
     }
+    return;
 }
 
-sub layout_and_print_ls_info {
-    my ($target_class, $info, $is_continuation) = @_;
-    my %info = %{$info};
+sub property_info {
+    my $target = shift;
 
-    # header
-    if($is_continuation) {
-        printf("and defined in %s:\n",  colored($target_class, 'magenta'));
-    } else {
-        printf("%s and %s defined in %s: (%s if overwrites inherited definition)\n",
-                colored('Methods', 'cyan'),
-                colored('properties', 'green'),
-                colored($target_class, 'magenta'),
-                colored('bold', 'bold'));
+    my %info;
+    for my $property_meta ($target->__meta__->properties) {
+        $info{$property_meta->property_name} = $property_meta->class_name;
     }
-
-    # body
-    my @colored_names = map {colored($_, 'cyan')} sort($info{new_methods}->members);
-    @colored_names = (@colored_names,
-            map {colored($_, 'cyan bold')} sort($info{overwritten_methods}->members));
-    @colored_names = (@colored_names,
-            map {colored($_, 'green')} sort($info{new_properties}->members));
-    @colored_names = (@colored_names,
-            map {colored($_, 'bold green')} sort($info{overwritten_properties}->members));
-    layout_and_print(\@colored_names, '   ');
+    return \%info;
 }
 
-sub get_method_and_property_info {
-    my ($target) = @_;
+sub class_symbols {
+    my @classes = @_;
 
-    my %result;
-    # get this class/objects method and property names
-    my @tmn = get_class_methods($target);
-    my @tpn = get_property_names($target);
-    $result{this_method_names} = \@tmn;
-    $result{this_property_names} = \@tpn;
+    my @possible_symbols = ('*', '**', '^', '^^', '#', '##', '&', '&&');
 
-    # get parents/grandparents... method and property names
-    my @parent_method_names;
-    my @parent_property_names;
-    for my $parent (get_class_parents($target)) {
-        @parent_method_names = (@parent_method_names,
-                get_class_methods_recursively($parent));
-        @parent_property_names = (@parent_property_names,
-                get_property_names_recursively($parent));
-    }
-    $result{parent_method_names} = \@parent_method_names;
-    $result{parent_property_names} = \@parent_property_names;
-
-    for my $key (keys %result) {
-        $result{sprintf("%s_set", $key)} = Set::Scalar->new(@{$result{$key}});
-    }
-
-    my $tm = $result{this_method_names_set};
-    my $pm = $result{parent_method_names_set};
-    my $tp = $result{this_property_names_set};
-    my $pp = $result{parent_property_names_set};
-
-    if($target->can('__meta__')) {
-        # Since UR properties automatically create a method for get/set, remove those from the
-        # methods sets.
-        $tm = $tm - $tp - $pp;
-        $pm = $pm - $tp - $pp;
-    } else {
-        $tp = $tp - $tm - $pm;
-        $pp = $pp - $tm - $pm;
-    }
-
-    $result{new_methods} = $tm - $pm;
-    $result{new_properties} = $tp - $pp;
-
-    $result{overwritten_methods} = $tm->intersection($pm);
-    $result{overwritten_properties} = $tp->intersection($pp);
-
-    $result{inherited_methods} = $pm - $tm;
-    $result{inherited_properties} = $pp - $tp;
-
-    return %result;
-}
-
-sub colorize_variable_names {
-    my ($names, $types) = @_;
-    my @names = @{$names};
-    my @types = @{$types};
-
-    my %colors = (
-        'ARRAY' => 'green',
-        'HASH' => 'magenta',
-        'SCALAR' => 'cyan',
-        'REF' => 'red',
-        'other' => 'blue',
-    );
-    my @colored_variable_names;
-    my $end = scalar(@names) - 1;
-    for my $i (0..$end) {
-        my $name = $names[$i];
-        my $type = $types[$i];
-        my $color = defined($colors{$type}) ? $colors{$type} : $colors{other};
-        push(@colored_variable_names, colored($name, $color));
-    }
-    return @colored_variable_names;
-}
-
-sub get_class_methods {
-    my ($target) = @_;
-    if(Class::Inspector->installed($target) or
-       Class::Inspector->loaded($target)) {
-        my $function_names = Class::Inspector->methods($target);
-        my @function_names = @{$function_names};
-        my $method_names = Class::Inspector->functions($target);
-        my @method_names = @{$method_names};
-        my @names = (@function_names, @method_names);
-        return @names;
-    } else {
-        my @empty;
-        return @empty;
-    }
-}
-
-sub get_class_methods_recursively {
-    my ($target) = @_;
-
-    my @function_names = get_class_methods($target);
-    for my $parent (get_class_parents($target)) {
-        @function_names = (@function_names, get_class_methods_recursively($parent));
-    }
-    return @function_names;
-}
-
-sub get_property_names {
-    my ($target) = @_;
-    if($target->can('__meta__')) {
-        my @property_names;
-        for my $prop ($target->__meta__->properties) {
-            if($prop->{class_name} eq $target->class) {
-                push(@property_names, $prop->{property_name});
-            }
+    my %symbols;
+    for my $class (@classes) {
+        my $symbol;
+        unless (exists($symbols{$class})) {
+            my $num_symbols = scalar(keys %symbols);
+            $symbol = shift(@possible_symbols) ||
+                    '*'x($num_symbols-5);
+            $symbols{$class} = sprintf("%4s", $symbol);
         }
-        return @property_names;
-    } elsif(Class::Inspector->installed($target) or
-            Class::Inspector->loaded($target)) {
-        my @property_names = keys %{$target . "::"};
-        return @property_names;
-    } else {
-        my @empty;
-        return @empty;
     }
+    return \%symbols;
 }
 
-sub get_property_names_recursively {
-    my ($target) = @_;
+sub color_and_layout {
+    my ($items, $class_symbols, $color) = @_;
 
-    my @property_names = get_property_names($target);
-    for my $parent (get_class_parents($target)) {
-        @property_names = (@property_names, get_property_names_recursively($parent));
+    my @colored_items;
+    for my $item (sort keys %$items) {
+        my $class = $items->{$item};
+        my $class_symbol = $class_symbols->{$class};
+        my $formatted_item = sprintf("%s%s", $class_symbol, colored($item, $color));
+        push @colored_items, $formatted_item;
     }
-    return @property_names;
+    layout_and_print([@colored_items], '  ');
+
+    return;
 }
 
-sub get_class_parents {
-    my ($target) = @_;
-
-    return @{$target . '::ISA'};
-}
-
-sub get_class_parents_recursively {
-    my ($target) = @_;
-    my @parents = get_class_parents($target);
-    for my $parent (get_class_parents($target)) {
-        @parents = (@parents, get_class_parents_recursively($parent));
-    }
-    return @parents;
-}
-
-
+1;

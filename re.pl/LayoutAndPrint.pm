@@ -18,6 +18,8 @@ our @EXPORT_OK = qw(
 sub layout_and_print {
     my ($items, $left_padding, $separator) = @_;
     my @items = @{$items};
+    return " " unless @items;
+
     $left_padding = '    ' unless defined($left_padding);
     $separator = '   ' unless defined($separator);
 

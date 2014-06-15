@@ -8,6 +8,11 @@ use Term::ReadKey 'GetTerminalSize';
 use Set::Scalar;
 use LayoutAndPrint qw(layout_and_print width);
 use Data::Dump qw(pp);
+use ReplCore qw(
+    is_ur_object
+    print_class_key
+    print_header
+);
 
 require Exporter;
 our @ISA = qw(Exporter);
@@ -30,19 +35,11 @@ sub view {
         die sprintf("command (view) only works on UR objects (with __meta__)");
     }
 
+    print_header($target);
     my ($properties, $class_symbols) = get_properties_and_class_symbols($target, $verbose, $memory_safe);
     print_view($target, $properties, $class_symbols, $verbose);
 
     return ' ';
-}
-
-sub is_ur_object {
-    my $value = shift;
-    if (ref($value) and UNIVERSAL::can($value, 'isa') and $value->isa('UR::Object')) {
-        return 1;
-    } else {
-        return 0;
-    }
 }
 
 sub get_properties_and_class_symbols {
@@ -52,21 +49,19 @@ sub get_properties_and_class_symbols {
 
     my %properties;
     my @possible_symbols = ('*', '**', '^', '^^', '#', '##', '&', '&&');
-    my %class_symbols = ($target->class => '');
+    my %class_symbols = ($target->class => sprintf("%4s", ' '));
 
     for my $property_meta ($target->__meta__->properties) {
         my $name = $property_meta->property_name;
         my $class_name = $property_meta->class_name;
 
-        my $class_symbol;
-        if (exists($class_symbols{$class_name})) {
-            $class_symbol = $class_symbols{$class_name};
-        } else {
+        unless (exists($class_symbols{$class_name})) {
             my $num_symbols = scalar(keys %class_symbols);
-            $class_symbol = shift(@possible_symbols) ||
+            my $symbol = shift(@possible_symbols) ||
                     '*'x$num_symbols;
-            $class_symbols{$class_name} = $class_symbol;
+            $class_symbols{$class_name} = sprintf("%4s", $symbol);
         }
+        my $class_symbol = $class_symbols{$class_name};
 
         my $name_string;
         my $info_string = $verbose ? get_info($property_meta) : '';
@@ -169,9 +164,11 @@ sub print_view {
     my $verbose = shift;
 
     my @table_names = table_names($target);
-    printf("==== %s %s====\n", colored($target->class, $COLORS{class}),
-        (scalar(@table_names) and $verbose) ?
-            sprintf("(%s) ", join(', ', map {colored(uc $_, $COLORS{db})} @table_names)) : '');
+    if ($verbose and scalar(@table_names)) {
+        printf "Table(s): %s",
+            sprintf("(%s) ", join(', ', map {colored(uc $_, $COLORS{db})} @table_names));
+    }
+
     my (@long_entries, @short_entries);
     my $short_size = (GetTerminalSize())[0] / 3;
     for my $property_name (sort keys %properties) {
@@ -183,20 +180,14 @@ sub print_view {
         }
     }
     if (@short_entries) {
-        layout_and_print(\@short_entries, '    ');
-    }
-    if (@long_entries) {
-        print "\n";
+        layout_and_print(\@short_entries, '  ');
     }
     for my $entry (@long_entries) {
-        printf "    %s\n", $entry;
+        printf " %s\n", $entry;
     }
-    for my $class_name (sort {$class_symbols{$a} cmp $class_symbols{$b}} keys %class_symbols) {
-        if ($class_name ne $target->class) {
-            printf "%s defined in %s\n", $class_symbols{$class_name},
-            colored($class_name, $COLORS{class});
-        }
-    }
+
+    delete $class_symbols{$target->class};
+    print_class_key(\%class_symbols);
 }
 
 sub format_short {

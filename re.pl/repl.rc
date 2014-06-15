@@ -5,7 +5,7 @@ use English;
 use Data::Dump qw(pp);
 
 BEGIN { push(@INC, $ENV{HOME} . '/.re.pl'); };
-use ls qw(ls);
+use ls qw(lineage ls);
 use view qw(view);
 
 use above 'Genome';
